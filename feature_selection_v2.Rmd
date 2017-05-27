@@ -1,0 +1,1137 @@
+---
+title: "Técnicas de  clustering aplicado al estudio de variantes de genomas virales"
+output:
+  html_document: default
+  html_notebook:
+    code_folding: hide
+    fig_height: 6
+    fig_width: 10
+---
+
+
+
+```{r  message=FALSE, warning=FALSE, setup}
+#librerias necesarias
+
+
+#library (Biostrings) # Manipulacion de secuencias y alineamientos
+
+library(ggplot2)
+library(plotly)
+library (RColorBrewer)
+library(caret)
+library(tidyr)
+library(dplyr)
+#library(reshape2)
+library(psych)
+library(irlba)
+library(fpc)
+
+```
+
+
+
+### Data
+```{r warning= FALSE, message=FALSE }
+train_v1<-read.csv("ccs.new_train_v1.csv", stringsAsFactors = FALSE)%>%select(-id)
+trainCat<-train_v1%>%select(type_cat, image_name)
+test_v1<-read.csv("ccs.new_test_v1.csv" , stringsAsFactors = FALSE)%>%select(-id)
+
+```
+
+
+
+### NSFW
+```{r warning= FALSE, message=FALSE }
+NSFWtrain<-read.csv("nsfwOut_train.csv" , stringsAsFactors = FALSE, header=FALSE)%>%
+                rename(image_name=V1, nsfw_val=V2)%>%
+                    mutate(nsfw_val_log=log(nsfw_val))
+NSFWtest<-read.csv("nsfwOut_test.csv" , stringsAsFactors = FALSE, header=FALSE)%>%
+  
+                rename(image_name=V1, nsfw_val=V2)%>%
+                    mutate(nsfw_val_log=log(nsfw_val))
+
+
+
+
+NSFWtrain<-left_join(trainCat,NSFWtrain, by=c("image_name"="image_name"))
+
+NSFWtrain%>%
+  spread(type_cat, nsfw_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~Type_1, name="Type_1") %>%
+          add_histogram(x = ~Type_2,name="Type_2" ) %>%
+           add_histogram(x = ~Type_3, name="Type_3" ) %>%
+        layout(barmode = "overlay",title = "NSFW value")
+
+## Logaritmic
+NSFWtrain%>%
+  spread(type_cat, nsfw_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(Type_1), name="Type_1") %>%
+          add_histogram(x = ~log(Type_2),name="Type_2" ) %>%
+           add_histogram(x = ~log(Type_3), name="Type_3" ) %>%
+        layout(barmode = "overlay", title = "log(NSFW value)")
+
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(NSFWtrain%>%select(nsfw_val,nsfw_val_log),
+                               function(x){mean(x,na.rm=TRUE)} ),
+              train.sd = lapply(NSFWtrain%>%select(nsfw_val,nsfw_val_log),
+                            function(x){sd(x,na.rm=TRUE)} ),
+                 test.mean = lapply(NSFWtest%>%select(nsfw_val,nsfw_val_log),
+                                   function(x){mean(x,na.rm=TRUE)}),
+                      test.sd = lapply(NSFWtest%>%select(nsfw_val,nsfw_val_log),
+                                       function(x){sd(x,na.rm=TRUE)})))
+
+
+
+```
+
+
+
+
+### Distance
+```{r warning= FALSE, message=FALSE }
+Distrain<-read.csv("train_distance.csv" , stringsAsFactors = FALSE,
+                   header=FALSE)%>%
+                     rename(image_name=V1, dist_val=V2)%>%
+                        mutate(dist_val_log=log(dist_val))
+  
+Distest<-read.csv("test_distance.csv" , stringsAsFactors = FALSE,
+                  header=FALSE)%>%
+                      rename(image_name=V1, dist_val=V2)%>%
+                          mutate(dist_val_log=log(dist_val))
+
+Distrain<-left_join(trainCat,Distrain, by=c("image_name"="image_name"))
+
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(Distrain%>%select(dist_val,dist_val_log),
+                               function(x){mean(x,na.rm=TRUE)} ),
+              train.sd = lapply(Distrain%>%select(dist_val,dist_val_log),
+                            function(x){sd(x,na.rm=TRUE)} ),
+                 test.mean = lapply(Distest%>%select(dist_val,dist_val_log),
+                                   function(x){mean(x,na.rm=TRUE)}),
+                      test.sd = lapply(Distest%>%select(dist_val,dist_val_log),
+                                       function(x){sd(x,na.rm=TRUE)})))
+
+
+
+#scale train
+Distrain_s<- scale(as.matrix(Distrain%>%select(dist_val, dist_val_log)),
+                   center=TRUE,scale=TRUE)
+
+#scale testing
+Distest_s<- scale(as.matrix(Distest%>%select(dist_val, dist_val_log),
+                                attr(Distrain_s, "scaled:center"),
+                                    attr(Distrain_s, "scaled:scale") ) )
+
+
+##Transform both sets
+Distrain<-cbind(Distrain%>%select(type_cat, image_name) , Distrain_s[,])
+Distest<-cbind(Distest%>%select( image_name) , Distest_s[,])
+
+
+
+
+Distrain%>%
+  spread(type_cat, dist_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~Type_1, name="Type_1") %>%
+          add_histogram(x = ~Type_2,name="Type_2" ) %>%
+           add_histogram(x = ~Type_3, name="Type_3" ) %>%
+        layout(barmode = "overlay",
+               title = "Distance")
+
+### Logaritm
+Distrain%>%
+  spread(type_cat, dist_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(Type_1), name="Type_1") %>%
+          add_histogram(x = ~log(Type_2),name="Type_2" ) %>%
+           add_histogram(x = ~log(Type_3), name="Type_3" ) %>%
+        layout(barmode = "overlay",
+               title = "Log (Distance)")
+
+
+## Check
+Distrain[1:5,1:4]
+Distest[1:5,1:3]
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(Distrain%>%select(dist_val,dist_val_log),
+                               function(x){mean(x,na.rm=TRUE)} ),
+              train.sd = lapply(Distrain%>%select(dist_val,dist_val_log),
+                            function(x){sd(x,na.rm=TRUE)} ),
+                 test.mean = lapply(Distest%>%select(dist_val,dist_val_log),
+                                   function(x){mean(x,na.rm=TRUE)}),
+                      test.sd = lapply(Distest%>%select(dist_val,dist_val_log),
+                                       function(x){sd(x,na.rm=TRUE)})))
+
+
+```
+
+
+
+
+
+
+### hashing
+```{r warning= FALSE, message=FALSE }
+pHashtrain<-read.csv("hashes_16_phash_training.csv" , stringsAsFactors = FALSE, header=FALSE)%>%select(-V2)%>%
+          #mutate_each(funs(whatever = ./15), V3:V66)
+            mutate_each(funs(./15), V3:V66)
+pHashtest<-read.csv("hashes_16_phash_testing.csv" , stringsAsFactors = FALSE, header=FALSE)%>%select(-V2)%>%
+          mutate_each(funs(./15), V3:V66)
+
+
+
+### REMOVE NEAR ZERO VARIATION
+nzv_11<- nearZeroVar(pHashtrain)
+nzv_12<- nearZeroVar(pHashtest)
+if(length(unique(c(nzv_11,nzv_12)))>0)
+      {
+        pHashtrain<- pHashtrain[, -unique(c(nzv_11,nzv_12))]
+        pHashtest<- pHashtest[, -unique(c(nzv_11,nzv_12))]
+        }
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(pHashtrain[,-1], mean),
+          train.sd = lapply(pHashtrain[,-1], sd),
+                test.mean = lapply(pHashtest[,-1], mean),
+                      test.sd = lapply(pHashtest[,-1], sd)))
+
+
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply( pHashtrain, function(x) is.numeric(x) )))
+
+pca <- prcomp(pHashtrain[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+
+
+### Plot importance
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                    geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~pixel features ")
+ggplotly(p)
+
+
+
+
+
+#Replace features by PCA components
+pHashtrain_pca<-as.data.frame(pca$x[,1:40])
+colnames(pHashtrain_pca)<-paste("pca_pHash_",1:40,sep="")
+
+### APPLY TO TESTING DATA 
+pHashtest_pca<-as.data.frame(predict(pca, newdata=pHashtest[,num.cols])[,1:40])
+colnames(pHashtest_pca)<-paste("pca_pHash_",1:40,sep="")
+
+
+pHashtrain<-cbind(pHashtrain[,1],pHashtrain_pca)
+
+pHashtest<-cbind(pHashtest[,1],pHashtest_pca)
+colnames(pHashtrain)[1]<-colnames(pHashtest)[1]<-"image_name"
+pHashtrain<-left_join(trainCat,pHashtrain, by=c("image_name"="image_name"))
+
+
+#### Plot Four first dimensions
+p <- plot_ly(pHashtrain, x = ~pca_pHash_1, y = ~pca_pHash_2, color = ~as.factor(type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+pHashtrain[1:5,1:5]
+pHashtest[1:5,1:5]
+
+```
+
+
+
+### Networks
+```{r warning= FALSE, message=FALSE }
+Namestrain<-read.csv("Names_train_features.csv" , stringsAsFactors = FALSE)
+Namestest<-read.csv("Names_test_features.csv" , stringsAsFactors = FALSE)
+
+##### Inceptionv3
+Inceptrain<- cbind(Namestrain,read.csv("Inception3_train_features.csv", stringsAsFactors = FALSE) )
+Inceptest<- cbind(Namestest, read.csv("Inception3_test_features.csv", stringsAsFactors = FALSE) )
+
+##### ResNet50
+RN50train<-cbind(Namestrain, read.csv("ResNet50_train_features.csv", stringsAsFactors = FALSE) )
+RN50test<-cbind(Namestest ,read.csv("ResNet50_test_features.csv", stringsAsFactors = FALSE) )
+
+#####VGG19 
+VGG19train<-cbind(Namestrain ,read.csv("VGG19_train_features.csv" , stringsAsFactors = FALSE) )
+VGG19test<-cbind(Namestest, read.csv("VGG19_test_features.csv" , stringsAsFactors = FALSE) )
+
+```
+
+
+
+
+
+### InceptionV3 Net
+```{r warning= FALSE, message=FALSE }
+
+
+### REMOVE NEAR ZERO VARIATION
+nzv_11<- nearZeroVar(Inceptrain)
+nzv_12<- nearZeroVar(Inceptest)
+if(length(unique(c(nzv_11,nzv_12)))>0)
+      {
+        Inceptrain<- Inceptrain[, -unique(c(nzv_11,nzv_12))]
+        Inceptrain<- Inceptest[, -unique(c(nzv_11,nzv_12))]
+        }
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(Inceptrain[,-1], mean),
+          train.sd = lapply(Inceptrain[,-1], sd),
+                test.mean = lapply(Inceptest[,-1], mean),
+                      test.sd = lapply(Inceptest[,-1], sd)))
+
+
+
+#### Plot first
+Inceptrain%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~X0, name="X0") %>%
+          add_histogram(x = ~X1,name="X1" ) %>%
+           add_histogram(x = ~X2, name="X2" ) %>%
+              add_histogram(x = ~X3, name="X3" ) %>%
+                add_histogram(x = ~X4, name="X4" ) %>%
+                    add_histogram(x = ~X5, name="X5" ) %>%
+                      add_histogram(x = ~X6, name="X6" ) %>%
+                           add_histogram(x = ~X7, name="X7" ) %>%
+                                add_histogram(x = ~X8, name="X8" ) %>%
+                                     add_histogram(x = ~X9, name="X9" ) %>%
+                                        add_histogram(x = ~X10, name="X10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "Inceptrain_outputs")
+
+
+#### Plot log
+Inceptrain%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(X0), name="X0") %>%
+          add_histogram(x = ~log(X1),name="X1" ) %>%
+           add_histogram(x = ~log(X2), name="X2" ) %>%
+              add_histogram(x = ~log(X3), name="X3" ) %>%
+                add_histogram(x = ~log(X4), name="X4" ) %>%
+                    add_histogram(x = ~log(X5), name="X5" ) %>%
+                      add_histogram(x = ~log(X6), name="X6" ) %>%
+                           add_histogram(x = ~log(X7), name="X7" ) %>%
+                                add_histogram(x = ~log(X8), name="X8" ) %>%
+                                     add_histogram(x = ~log(X9), name="X9" ) %>%
+                                        add_histogram(x = ~log(X10), name="X10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "log(Inceptrain_outputs)")
+
+
+####################################################################################################
+####################################################################################################
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply( Inceptrain, function(x) is.numeric(x) )))
+
+pca <- prcomp(Inceptrain[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+
+
+### Plot importance
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                    geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~Inceptrain features ")
+ggplotly(p)
+
+####################################################################################################
+####################################################################################################
+####################################################################################################
+
+
+
+#Replace features by PCA components
+Inceptrain_pca<-as.data.frame(pca$x[,1:50])
+colnames(Inceptrain_pca)<-paste("pca_Incep3_",1:50,sep="")
+
+### APPLY TO TESTING DATA 
+Inceptest_pca<-as.data.frame(predict(pca, newdata=Inceptest[,num.cols])[,1:50])
+colnames(Inceptest_pca)<-paste("pca_Incep3_",1:50,sep="")
+
+
+Inceptrain<-cbind(Inceptrain[,1],Inceptrain_pca)
+Inceptest<-cbind(Inceptest[,1],Inceptest_pca)
+
+colnames(Inceptrain)[1]<-colnames(Inceptest)[1]<-"image_name"
+Inceptrain<-left_join(trainCat,Inceptrain, by=c("image_name"="image_name"))
+
+
+#### Plot Four first dimensions
+p <- plot_ly(Inceptrain, x = ~pca_Incep3_1, y = ~pca_Incep3_2, color = ~as.factor(type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+
+
+#### Plot first
+Inceptrain%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~pca_Incep3_1, name="cmp1") %>%
+          add_histogram(x = ~pca_Incep3_2,name="cmp2" ) %>%
+           add_histogram(x = ~pca_Incep3_3, name="cmp3" ) %>%
+              add_histogram(x = ~pca_Incep3_4, name="cmp4" ) %>%
+                add_histogram(x = ~pca_Incep3_5, name="cmp5" ) %>%
+                    add_histogram(x = ~pca_Incep3_6, name="cmp6" ) %>%
+                      add_histogram(x = ~pca_Incep3_7, name="cmp7" ) %>%
+                           add_histogram(x = ~pca_Incep3_8, name="cmp8" ) %>%
+                                add_histogram(x = ~pca_Incep3_9, name="cmp9" ) %>%
+                                     add_histogram(x = ~pca_Incep3_10, name="cmp10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "Incep3_outputs")
+
+
+Inceptrain[1:5,1:5]
+Inceptest[1:5,1:5]
+
+```
+
+
+
+
+
+
+
+
+
+
+### ResNet50 Net
+```{r warning= FALSE, message=FALSE }
+
+
+### REMOVE NEAR ZERO VARIATION
+nzv_11<- nearZeroVar(RN50train)
+nzv_12<- nearZeroVar(RN50test)
+if(length(unique(c(nzv_11,nzv_12)))>0)
+      {
+        RN50train<- RN50train[, -unique(c(nzv_11,nzv_12))]
+        RN50train<- RN50test[, -unique(c(nzv_11,nzv_12))]
+        }
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(RN50train[,-1], mean),
+          train.sd = lapply(RN50train[,-1], sd),
+                test.mean = lapply(RN50test[,-1], mean),
+                      test.sd = lapply(RN50test[,-1], sd)))
+
+
+
+#### Plot first
+RN50train%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~X0, name="X0") %>%
+          add_histogram(x = ~X1,name="X1" ) %>%
+           add_histogram(x = ~X2, name="X2" ) %>%
+              add_histogram(x = ~X3, name="X3" ) %>%
+                add_histogram(x = ~X4, name="X4" ) %>%
+                    add_histogram(x = ~X5, name="X5" ) %>%
+                      add_histogram(x = ~X6, name="X6" ) %>%
+                           add_histogram(x = ~X7, name="X7" ) %>%
+                                add_histogram(x = ~X8, name="X8" ) %>%
+                                     add_histogram(x = ~X9, name="X9" ) %>%
+                                        add_histogram(x = ~X10, name="X10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "RN50train_outputs")
+
+
+#### Plot log
+RN50train%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(X0), name="X0") %>%
+          add_histogram(x = ~log(X1),name="X1" ) %>%
+           add_histogram(x = ~log(X2), name="X2" ) %>%
+              add_histogram(x = ~log(X3), name="X3" ) %>%
+                add_histogram(x = ~log(X4), name="X4" ) %>%
+                    add_histogram(x = ~log(X5), name="X5" ) %>%
+                      add_histogram(x = ~log(X6), name="X6" ) %>%
+                           add_histogram(x = ~log(X7), name="X7" ) %>%
+                                add_histogram(x = ~log(X8), name="X8" ) %>%
+                                     add_histogram(x = ~log(X9), name="X9" ) %>%
+                                        add_histogram(x = ~log(X10), name="X10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "log(RN50train_outputs)")
+
+
+####################################################################################################
+####################################################################################################
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply( RN50train, function(x) is.numeric(x) )))
+
+pca <- prcomp(RN50train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+
+
+### Plot importance
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                    geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~RN50train features ")
+ggplotly(p)
+
+####################################################################################################
+####################################################################################################
+####################################################################################################
+
+
+
+#Replace features by PCA components
+RN50train_pca<-as.data.frame(pca$x[,1:40])
+colnames(RN50train_pca)<-paste("pca_RN50_",1:40,sep="")
+
+### APPLY TO TESTING DATA 
+RN50test_pca<-as.data.frame(predict(pca, newdata=RN50test[,num.cols])[,1:40])
+colnames(RN50test_pca)<-paste("pca_RN50_",1:40,sep="")
+
+
+RN50train<-cbind(RN50train[,1],RN50train_pca)
+RN50test<-cbind(RN50test[,1],RN50test_pca)
+
+colnames(RN50train)[1]<-colnames(RN50test)[1]<-"image_name"
+RN50train<-left_join(trainCat,RN50train, by=c("image_name"="image_name"))
+
+
+#### Plot Four first dimensions
+p <- plot_ly(RN50train, x = ~pca_RN50_1, y = ~pca_RN50_2, color = ~as.factor(type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+
+
+#### Plot first
+RN50train%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~pca_RN50_1, name="cmp1") %>%
+          add_histogram(x = ~pca_RN50_2,name="cmp2" ) %>%
+           add_histogram(x = ~pca_RN50_3, name="cmp3" ) %>%
+              add_histogram(x = ~pca_RN50_4, name="cmp4" ) %>%
+                add_histogram(x = ~pca_RN50_5, name="cmp5" ) %>%
+                    add_histogram(x = ~pca_RN50_6, name="cmp6" ) %>%
+                      add_histogram(x = ~pca_RN50_7, name="cmp7" ) %>%
+                           add_histogram(x = ~pca_RN50_8, name="cmp8" ) %>%
+                                add_histogram(x = ~pca_RN50_9, name="cmp9" ) %>%
+                                     add_histogram(x = ~pca_RN50_10, name="cmp10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "RN50_outputs")
+
+
+RN50train[1:5,1:5]
+RN50test[1:5,1:5]
+```
+
+
+
+
+
+
+
+
+
+### VGG19 Net
+```{r warning= FALSE, message=FALSE }
+
+
+### REMOVE NEAR ZERO VARIATION
+nzv_11<- nearZeroVar(VGG19train)
+nzv_12<- nearZeroVar(VGG19test)
+if(length(unique(c(nzv_11,nzv_12)))>0)
+      {
+        VGG19train<- VGG19train[, -unique(c(nzv_11,nzv_12))]
+        VGG19train<- VGG19test[, -unique(c(nzv_11,nzv_12))]
+        }
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(VGG19train[,-1], mean),
+          train.sd = lapply(VGG19train[,-1], sd),
+                test.mean = lapply(VGG19test[,-1], mean),
+                      test.sd = lapply(VGG19test[,-1], sd)))
+
+
+
+#### Plot first
+VGG19train%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~X0, name="X0") %>%
+          add_histogram(x = ~X1,name="X1" ) %>%
+           add_histogram(x = ~X2, name="X2" ) %>%
+              add_histogram(x = ~X3, name="X3" ) %>%
+                add_histogram(x = ~X4, name="X4" ) %>%
+                    add_histogram(x = ~X5, name="X5" ) %>%
+                      add_histogram(x = ~X6, name="X6" ) %>%
+                           add_histogram(x = ~X7, name="X7" ) %>%
+                                add_histogram(x = ~X8, name="X8" ) %>%
+                                     add_histogram(x = ~X9, name="X9" ) %>%
+                                        add_histogram(x = ~X10, name="X10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "VGG19train_outputs")
+
+
+#### Plot log
+VGG19train%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(X0), name="X0") %>%
+          add_histogram(x = ~log(X1),name="X1" ) %>%
+           add_histogram(x = ~log(X2), name="X2" ) %>%
+              add_histogram(x = ~log(X3), name="X3" ) %>%
+                add_histogram(x = ~log(X4), name="X4" ) %>%
+                    add_histogram(x = ~log(X5), name="X5" ) %>%
+                      add_histogram(x = ~log(X6), name="X6" ) %>%
+                           add_histogram(x = ~log(X7), name="X7" ) %>%
+                                add_histogram(x = ~log(X8), name="X8" ) %>%
+                                     add_histogram(x = ~log(X9), name="X9" ) %>%
+                                        add_histogram(x = ~log(X10), name="X10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "log(VGG19train_outputs)")
+
+
+####################################################################################################
+####################################################################################################
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply( VGG19train, function(x) is.numeric(x) )))
+
+pca <- prcomp(VGG19train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+
+
+### Plot importance
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                    geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~VGG19train features ")
+ggplotly(p)
+
+####################################################################################################
+####################################################################################################
+####################################################################################################
+
+
+
+#Replace features by PCA components
+VGG19train_pca<-as.data.frame(pca$x[,1:40])
+colnames(VGG19train_pca)<-paste("pca_VGG19_",1:40,sep="")
+
+### APPLY TO TESTING DATA 
+VGG19test_pca<-as.data.frame(predict(pca, newdata=VGG19test[,num.cols])[,1:40])
+colnames(VGG19test_pca)<-paste("pca_VGG19_",1:40,sep="")
+
+
+VGG19train<-cbind(VGG19train[,1],VGG19train_pca)
+VGG19test<-cbind(VGG19test[,1],VGG19test_pca)
+
+colnames(VGG19train)[1]<-colnames(VGG19test)[1]<-"image_name"
+VGG19train<-left_join(trainCat,VGG19train, by=c("image_name"="image_name"))
+
+
+#### Plot Four first dimensions
+p <- plot_ly(VGG19train, x = ~pca_VGG19_1, y = ~pca_VGG19_2, color = ~as.factor(type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+
+
+#### Plot first
+VGG19train%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~pca_VGG19_1, name="cmp1") %>%
+          add_histogram(x = ~pca_VGG19_2,name="cmp2" ) %>%
+           add_histogram(x = ~pca_VGG19_3, name="cmp3" ) %>%
+              add_histogram(x = ~pca_VGG19_4, name="cmp4" ) %>%
+                add_histogram(x = ~pca_VGG19_5, name="cmp5" ) %>%
+                    add_histogram(x = ~pca_VGG19_6, name="cmp6" ) %>%
+                      add_histogram(x = ~pca_VGG19_7, name="cmp7" ) %>%
+                           add_histogram(x = ~pca_VGG19_8, name="cmp8" ) %>%
+                                add_histogram(x = ~pca_VGG19_9, name="cmp9" ) %>%
+                                     add_histogram(x = ~pca_VGG19_10, name="cmp10" ) %>%
+                                        layout(barmode = "overlay",
+                                               title = "VGG19_outputs")
+
+
+VGG19train[1:5,1:5]
+VGG19test[1:5,1:5]
+```
+
+
+
+#Generate outputs
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+train_v2<-left_join(NSFWtrain, Distrain%>%select(-type_cat), by=c("image_name"="image_name") )
+train_v2<-left_join(train_v2, pHashtrain%>%select(-type_cat), by=c("image_name"="image_name") )
+train_v2<-left_join(train_v2, Inceptrain%>%select(-type_cat), by=c("image_name"="image_name") )
+train_v2<-left_join(train_v2, RN50train%>%select(-type_cat), by=c("image_name"="image_name") )
+train_v2<-left_join(train_v2, VGG19train%>%select(-type_cat), by=c("image_name"="image_name") )
+
+library(xda)
+xdatrain<-numSummary(train_v2)
+train_v2[is.na(train_v2)] <- 0
+xdatrain<-numSummary(train_v2)
+
+test_v2<-left_join(NSFWtest, Distest, by=c("image_name"="image_name" ) )
+test_v2<-left_join(test_v2, pHashtest, by=c("image_name"="image_name") )
+test_v2<-left_join(test_v2, Inceptest, by=c("image_name"="image_name") )
+test_v2<-left_join(test_v2, RN50test, by=c("image_name"="image_name") )
+test_v2<-left_join(test_v2, VGG19test, by=c("image_name"="image_name") )
+
+xdatest<-numSummary(test_v2)
+test_v2[is.na(test_v2)] <- 0
+xdatest<-numSummary(test_v2)
+
+train_v3<-left_join(train_v1, train_v2%>%select(-type_cat), by=c("image_name"="image_name") )
+test_v3<-left_join(test_v1, test_v2, by=c("image_name"="image_name" ) )
+
+write.csv(train_v1,"train_v1.csv",row.names = FALSE )
+write.csv(test_v1,"test_v1.csv",row.names = FALSE )
+
+write.csv(train_v2,"train_v2.csv",row.names = FALSE )
+write.csv(test_v2,"test_v2.csv",row.names = FALSE )
+
+write.csv(train_v3,"train_v3.csv",row.names = FALSE )
+write.csv(test_v3,"test_v3.csv",row.names = FALSE )
+```
+
+
+
+
+
+
+### correlation  ~rest features
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+#scale train
+feat_rest_train_s<- scale(as.matrix(feat_rest_train%>%select(-creation_time))
+                                                                  , center=TRUE,scale=TRUE)
+
+#scale testing
+feat_rest_test_s<- scale(as.matrix(feat_rest_test%>%select(-creation_time)
+                                                                  , center=TRUE,scale=TRUE),
+                                                                     attr(feat_rest_train_s, "scaled:center"),
+                                                                        attr(feat_rest_train_s, "scaled:scale") )
+
+
+##Transform both sets
+feat_rest_train<-as.data.frame(feat_rest_train_s[,])
+feat_rest_test<-as.data.frame(feat_rest_test_s[,])
+
+## Check
+feat_rest_train[1:5,1:5]
+feat_rest_test[1:5,1:5]
+
+### Scale alt
+#feat_rest_test<- scale(as.matrix(feat_rest_test), center = mean(feat_rest_train), scale = sd(feat_rest_train) ))
+
+
+
+# #to data frame
+# feat_rest_train_s<-as.data.frame(feat_rest_train_s)
+#     feat_rest_test_s<-as.data.frame(feat_rest_test_s)
+# 
+# 
+# ##############################################3
+# rep_rest<-cbind(train.mean = lapply(feat_rest_train_s[,-1], mean),
+#                      train.sd = lapply(feat_rest_train_s[,-1], sd),
+#                            test.mean = lapply(feat_rest_test_s[,-1], mean),
+#                                 test.sd = lapply(feat_rest_test_s[,-1], sd))
+# head(rep_rest)
+
+
+##############################################3
+
+# 
+# ### check in detail
+# library(xda)
+# xdatrain<-numSummary(feat_rest_train_s)
+# head(xdatrain)
+# xdatest<-numSummary(feat_rest_test_s)
+# head(xdatest)
+# #xdatab2<-charSummary(tab3)
+```
+
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+
+#scale train
+feat_X3D_train_s<- scale(as.matrix(feat_X3D_train), center=TRUE,scale=TRUE)
+
+#scale testing
+feat_X3D_test_s<- scale(as.matrix(feat_X3D_test),
+                         attr(feat_X3D_train_s, "scaled:center"),
+                                        attr(feat_X3D_train_s, "scaled:scale") )
+
+
+##Transform both sets
+feat_X3D_train<-as.data.frame(feat_X3D_train_s[,])
+feat_X3D_test<-as.data.frame(feat_X3D_test_s[,])
+
+## Check
+feat_X3D_train[1:5,1:5]
+feat_X3D_test[1:5,1:5]
+# 
+# #to data frame
+# feat_X3D_train_s<-as.data.frame(feat_X3D_train_s)
+#     feat_X3D_test_s<-as.data.frame(feat_X3D_test_s)
+# 
+# 
+# ##############################################3
+# rep_X3D<-cbind(train.mean = lapply(feat_X3D_train_s[,-1], mean),
+#                      train.sd = lapply(feat_X3D_train_s[,-1], sd),
+#                            test.mean = lapply(feat_X3D_test_s[,-1], mean),
+#                                 test.sd = lapply(feat_X3D_test_s[,-1], sd))
+# head(rep_X3D)
+# 
+# 
+# ##############################################3
+# 
+# 
+# ### check in detail
+# library(xda)
+# xdatrain<-numSummary(feat_X3D_train_s)
+# head(xdatrain)
+# xdatest<-numSummary(feat_X3D_test_s)
+# head(xdatest)
+#xdatab2<-cha
+```
+
+
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+#scale train
+feat_pixel_train_s<- scale(as.matrix(feat_pixel_train), center=TRUE,scale=TRUE)
+
+#scale testing
+feat_pixel_test_s<- scale(as.matrix(feat_pixel_test),
+                         attr(feat_pixel_train_s, "scaled:center"),
+                                        attr(feat_pixel_train_s, "scaled:scale") )
+
+##Transform both sets
+feat_pixel_train<-as.data.frame(feat_pixel_train_s[,])
+feat_pixel_test<-as.data.frame(feat_pixel_test_s[,])
+
+## Check
+feat_pixel_train[1:5,1:5]
+feat_pixel_test[1:5,1:5]
+
+# 
+# 
+# 
+# #to data frame
+# feat_pixel_train_s<-as.data.frame(feat_pixel_train_s)
+#     feat_pixel_test_s<-as.data.frame(feat_pixel_test_s)
+# 
+# 
+# ##############################################3
+# rep_pixel<-cbind(train.mean = lapply(feat_pixel_train_s[,-1], mean),
+#                      train.sd = lapply(feat_pixel_train_s[,-1], sd),
+#                            test.mean = lapply(feat_pixel_test_s[,-1], mean),
+#                                 test.sd = lapply(feat_pixel_test_s[,-1], sd))
+# head(rep_pixel)
+# 
+# 
+# ##############################################3
+# 
+# 
+# ### check in detail
+# library(xda)
+# xdatrain<-numSummary(feat_pixel_train_s)
+# head(xdatrain)
+# xdatest<-numSummary(feat_pixel_test_s)
+# head(xdatest)
+# #xdatab2<-cha
+```
+
+
+
+### correlation  ~pixel features
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+####################################################################################################################
+#Elegimos las componentes a utilizar
+num.cols <- names(which(sapply(feat_pixel_train, function(x) is.numeric(x) )))
+
+set.seed(1234)
+num.cols<- sample(num.cols, 100)
+
+svd_seq<-feat_pixel_train[,num.cols ]
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+```
+
+### PCA from ~pixel features
+```{r warning= FALSE, message=FALSE }
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply(feat_pixel_train, function(x) is.numeric(x) )))
+
+pca <- prcomp(feat_pixel_train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                    geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~pixel features ")
+ggplotly(p)
+#Replace features by PCA components
+feat_pixel_train_pca<-as.data.frame(pca$x[,1:100])
+colnames(feat_pixel_train_pca)<-paste("pca_pixel_",1:100,sep="")
+
+### APPLY TO TESTING DATA 
+feat_pixel_test_pca<-as.data.frame(predict(pca, newdata=feat_pixel_test[,num.cols])[,1:100])
+colnames(feat_pixel_test_pca)<-paste("pca_pixel_",1:100,sep="")
+
+
+```
+
+
+### scatter first 4 dimensions
+```{r warning= FALSE, message=FALSE ,fig.width = 10, fig.height = 10 , fig.align = 'center' }
+
+library(plotly)
+
+pc<-as.data.frame(pca$x[,1:4])%>%
+                      rename(Dim1=PC1,
+                             Dim2=PC2,
+                             Dim3=PC3,
+                             Dim4=PC4)
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim2, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim3, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim3')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim2, y = ~Dim4, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim4')))
+
+p
+
+
+```
+
+### correlation  ~X3D features
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+####################################################################################################################
+#Elegimos las componentes a utilizar
+num.cols <- names(which(sapply(feat_X3D_train, function(x) is.numeric(x) )))
+
+svd_seq<-feat_X3D_train[,num.cols ]
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+```
+
+
+### PCA from ~X3D features
+```{r warning= FALSE, message=FALSE }
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply(feat_X3D_train, function(x) is.numeric(x) )))
+
+pca <- prcomp(feat_X3D_train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                                            geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~X3D features ")
+ggplotly(p)
+#Replace features by PCA components
+feat_X3D_train_pca<-as.data.frame(pca$x[,1:10])
+colnames(feat_X3D_train_pca)<-paste("pca_X3D_",1:10,sep="")
+
+### Apply to testing
+feat_X3D_test_pca<-as.data.frame(predict(pca, newdata=feat_X3D_test[,num.cols])[,1:10])
+colnames(feat_X3D_test_pca)<-paste("pca_X3D_",1:10,sep="")
+```
+
+### scatter first 4 dimensions
+```{r warning= FALSE, message=FALSE ,fig.width = 10, fig.height = 10 , fig.align = 'center' }
+
+library(plotly)
+
+pc<-as.data.frame(pca$x[,1:4])%>%
+                      rename(Dim1=PC1,
+                             Dim2=PC2,
+                             Dim3=PC3,
+                             Dim4=PC4)
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim2, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim3, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim3')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim2, y = ~Dim4, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim4')))
+
+p
+
+
+```
+
+
+### Análisis de correlación
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+####################################################################################################################
+#Elegimos las componentes a utilizar
+num.cols <- names(which(sapply(feat_rest_train, function(x) is.numeric(x) )))
+
+svd_seq<-feat_rest_train[,num.cols ]
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+```
+
+
+### PCA from ~rest features
+```{r warning= FALSE, message=FALSE }
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply(feat_rest_train, function(x) is.numeric(x) )))
+
+pca <- prcomp(feat_rest_train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                                            geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~X3D features ")
+ggplotly(p)
+#Replace features by PCA components
+feat_rest_train_pca<-as.data.frame(pca$x[,1:12])
+colnames(feat_rest_train_pca)<-paste("pca_rest_",1:12,sep="")
+
+## Apply to testing
+feat_rest_test_pca<-as.data.frame(predict(pca, newdata=feat_rest_test[,num.cols])[,1:12])
+colnames(feat_rest_test_pca)<-paste("pca_rest_",1:12,sep="")
+```
+
+
+### scatter first 4 dimensions
+```{r warning= FALSE, message=FALSE ,fig.width = 10, fig.height = 10 , fig.align = 'center' }
+
+library(plotly)
+
+pc<-as.data.frame(pca$x[,1:4])%>%
+                      rename(Dim1=PC1,
+                             Dim2=PC2,
+                             Dim3=PC3,
+                             Dim4=PC4)
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim2, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim3, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim3')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim2, y = ~Dim4, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim4')))
+
+p
+
+
+
+```
+
+
+
+
+### Análisis de correlación X3D + PCA
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+testcor<-cbind(feat_X3D_train_pca, feat_X3D_train)
+
+svd_seq<-testcor
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+
+
+#feat_X3D_train_pca, feat_X3D_train, feat_pixel_train_pca,feat_rest_train_pca
+
+```
+
+
+

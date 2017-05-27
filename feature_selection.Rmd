@@ -19,7 +19,7 @@ output:
 library(ggplot2)
 library(plotly)
 library (RColorBrewer)
-
+library(caret)
 library(tidyr)
 library(dplyr)
 #library(reshape2)
@@ -33,14 +33,144 @@ library(fpc)
 
 ### Data
 ```{r warning= FALSE, message=FALSE }
-train<-read.csv("/home/sergio/Documents/KAGGLE/CervicalCancerScreening/output/features/Andrei/old/ccs.pipelines.example_pipeline.ChantaPipeline_train_.csv", stringsAsFactors = FALSE)%>%
-          select(-X)%>%
-              mutate(id=as.numeric(gsub(".jpg","",image_name)))
-test<-read.csv("/home/sergio/Documents/KAGGLE/CervicalCancerScreening/output/features/Andrei/old/ccs.pipelines.example_pipeline.ChantaPipeline_test_.csv" , stringsAsFactors = FALSE)%>%
-            select(-X)%>%
-              mutate(id=as.numeric(gsub(".jpg","",image_name)))
+train<-read.csv("ccs.new_train_v1.csv", stringsAsFactors = FALSE)%>%select(-id)
+trainCat<-train%>%select(type_cat, image_name)
+test<-read.csv("ccs.new_test_v1.csv" , stringsAsFactors = FALSE)%>%select(-id)
 
 ```
+
+
+
+
+
+
+
+### Distance
+```{r warning= FALSE, message=FALSE }
+Distrain<-read.csv("train_distance.csv" , stringsAsFactors = FALSE,
+                   header=FALSE)%>%
+                     rename(image_name=V1, dist_val=V2)%>%
+                        mutate(dist_val_log=log(dist_val))
+  
+Distest<-read.csv("test_distance.csv" , stringsAsFactors = FALSE,
+                  header=FALSE)%>%
+                      rename(image_name=V1, dist_val=V2)%>%
+                          mutate(dist_val_log=log(dist_val))
+
+Distrain<-left_join(trainCat,Distrain, by=c("image_name"="image_name"))
+
+Distrain%>%
+  spread(type_cat, dist_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~Type_1, name="Type_1") %>%
+          add_histogram(x = ~Type_2,name="Type_2" ) %>%
+           add_histogram(x = ~Type_3, name="Type_3" ) %>%
+        layout(barmode = "overlay",
+               title = "Distance")
+
+### Logaritm
+Distrain%>%
+  spread(type_cat, dist_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(Type_1), name="Type_1") %>%
+          add_histogram(x = ~log(Type_2),name="Type_2" ) %>%
+           add_histogram(x = ~log(Type_3), name="Type_3" ) %>%
+        layout(barmode = "overlay",
+               title = "Log (Distance)")
+
+
+```
+
+
+
+### NSFW
+```{r warning= FALSE, message=FALSE }
+NSFWtrain<-read.csv("nsfwOut_train.csv" , stringsAsFactors = FALSE, header=FALSE)%>%
+                rename(image_name=V1, nsfw_val=V2)%>%
+                    mutate(nsfw_val_log=log(nsfw_val))
+NSFWtest<-read.csv("nsfwOut_test.csv" , stringsAsFactors = FALSE, header=FALSE)%>%
+                rename(image_name=V1, nsfw_val=V2)%>%
+                    mutate(nsfw_val_log=log(nsfw_val))
+
+
+
+
+NSFWtrain<-left_join(trainCat,NSFWtrain, by=c("image_name"="image_name"))
+
+NSFWtrain%>%
+  spread(type_cat, nsfw_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~Type_1, name="Type_1") %>%
+          add_histogram(x = ~Type_2,name="Type_2" ) %>%
+           add_histogram(x = ~Type_3, name="Type_3" ) %>%
+        layout(barmode = "overlay",title = "NSFW value")
+
+## Logaritmic
+NSFWtrain%>%
+  spread(type_cat, nsfw_val)%>%
+    plot_ly(alpha = 0.6) %>%
+        add_histogram(x = ~log(Type_1), name="Type_1") %>%
+          add_histogram(x = ~log(Type_2),name="Type_2" ) %>%
+           add_histogram(x = ~log(Type_3), name="Type_3" ) %>%
+        layout(barmode = "overlay", title = "log(NSFW value)")
+
+```
+
+
+
+### hashing
+```{r warning= FALSE, message=FALSE }
+pHashtrain<-read.csv("hashes_16_phash_training.csv" , stringsAsFactors = FALSE, header=FALSE)%>%select(-V2)%>%
+          #mutate_each(funs(whatever = ./15), V3:V66)
+            mutate_each(funs(./15), V3:V66)
+pHashtest<-read.csv("hashes_16_phash_testing.csv" , stringsAsFactors = FALSE, header=FALSE)%>%select(-V2)%>%
+          mutate_each(funs(./15), V3:V66)
+
+
+
+### REMOVE NEAR ZERO VARIATION
+nzv_11<- nearZeroVar(pHashtrain)
+nzv_12<- nearZeroVar(pHashtest)
+if(length(unique(c(nzv_11,nzv_12)))>0)
+      {
+        pHashtrain<- pHashtrain[, -unique(c(nzv_11,nzv_12))]
+        pHashtest<- pHashtest[, -unique(c(nzv_11,nzv_12))]
+        }
+
+##Check consistency at both sets
+head(cbind(train.mean = lapply(feat_rest_train[,-1], mean),
+          train.sd = lapply(feat_rest_train[,-1], sd),
+                test.mean = lapply(feat_rest_test[,-1], mean),
+                      test.sd = lapply(feat_rest_test[,-1], sd)))
+
+```
+
+
+
+
+
+
+### Networks
+```{r warning= FALSE, message=FALSE }
+Namestrain<-read.csv("Names_train_features.csv" , stringsAsFactors = FALSE)
+Namestest<-read.csv("Names_test_features.csv" , stringsAsFactors = FALSE)
+
+##### Inceptionv3
+Inceptrain<- cbind(Namestrain,read.csv("Inception3_train_features.csv", stringsAsFactors = FALSE) )
+Inceptest<- cbind(Namestest, read.csv("Inception3_test_features.csv", stringsAsFactors = FALSE) )
+
+##### ResNet50
+RN50train<-cbind(Namestrain, read.csv("ResNet50_train_features.csv", stringsAsFactors = FALSE) )
+RN50test<-cbind(Namestest ,read.csv("ResNet50_test_features.csv", stringsAsFactors = FALSE) )
+
+#####VGG19 
+VGG19train<-cbind(Namestrain ,read.csv("VGG19_train_features.csv" , stringsAsFactors = FALSE) )
+VGG19test<-cbind(Namestest, read.csv("VGG19_test_features.csv" , stringsAsFactors = FALSE) )
+
+```
+
+
+
 
 ### Explore  features names
 ```{r warning= FALSE, message=FALSE }
