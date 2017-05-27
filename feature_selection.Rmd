@@ -1,0 +1,545 @@
+---
+title: "Técnicas de  clustering aplicado al estudio de variantes de genomas virales"
+output:
+  html_document: default
+  html_notebook:
+    code_folding: hide
+    fig_height: 6
+    fig_width: 10
+---
+
+
+
+```{r  message=FALSE, warning=FALSE, setup}
+#librerias necesarias
+
+
+#library (Biostrings) # Manipulacion de secuencias y alineamientos
+
+library(ggplot2)
+library(plotly)
+library (RColorBrewer)
+
+library(tidyr)
+library(dplyr)
+#library(reshape2)
+library(psych)
+library(irlba)
+library(fpc)
+
+```
+
+
+
+### Data
+```{r warning= FALSE, message=FALSE }
+train<-read.csv("/home/sergio/Documents/KAGGLE/CervicalCancerScreening/output/features/Andrei/old/ccs.pipelines.example_pipeline.ChantaPipeline_train_.csv", stringsAsFactors = FALSE)%>%
+          select(-X)%>%
+              mutate(id=as.numeric(gsub(".jpg","",image_name)))
+test<-read.csv("/home/sergio/Documents/KAGGLE/CervicalCancerScreening/output/features/Andrei/old/ccs.pipelines.example_pipeline.ChantaPipeline_test_.csv" , stringsAsFactors = FALSE)%>%
+            select(-X)%>%
+              mutate(id=as.numeric(gsub(".jpg","",image_name)))
+
+```
+
+### Explore  features names
+```{r warning= FALSE, message=FALSE }
+#length(grep("pixel",colnames(train), value=TRUE))
+train_index<-train%>% dplyr::select(type_cat,image_name,id)
+test_index<-test%>% dplyr::select(image_name,id)
+#Remove type_cat
+train<-train%>% dplyr::select(-type_cat,-image_name)
+test<-test%>% dplyr::select(-image_name)
+
+#Feature segementation for exploration and transformation
+feat_pixel_train<- train%>% dplyr::select(starts_with("pixel"))
+feat_pixel_test<- test%>% dplyr::select(starts_with("pixel"))
+feat_X3D_train<- train%>% dplyr::select(starts_with("X3D"))
+feat_X3D_test<- test%>% dplyr::select(starts_with("X3D"))
+feat_rest_train<- train%>% dplyr::select(-starts_with("pixel"),-starts_with("X3D"))
+feat_rest_test<- test%>% dplyr::select(-starts_with("pixel"),-starts_with("X3D")) 
+
+```
+
+
+
+
+### Filter invariant features
+```{r warning= FALSE, message=FALSE }
+#Check near Zero variance features
+library(caret)
+#NoVar<-nearZeroVar(feat_pixel,saveMetrics= TRUE)
+#NoVar<-nearZeroVar(feat_X3D,saveMetrics= TRUE)
+
+### REST
+nzv_11 <- nearZeroVar(feat_rest_train)
+nzv_12 <- nearZeroVar(feat_rest_test)
+if(length(unique(c(nzv_11,nzv_12)))>0)
+      {
+        feat_rest_train<- feat_rest_train[, -unique(c(nzv_11,nzv_12))]
+        feat_rest_test<- feat_rest_test[, -unique(c(nzv_11,nzv_12))]
+        }
+
+### PIXEL
+nzv_21<- nearZeroVar(feat_pixel_train)
+nzv_22 <- nearZeroVar(feat_pixel_test)
+
+if(length(unique(c(nzv_21,nzv_22)))>0)
+      {
+        feat_pixel_train<- feat_pixel_train[, -unique(c(nzv_21,nzv_22))]
+        feat_pixel_test<- feat_pixel_test[, -unique(c(nzv_21,nzv_22))]
+        }
+
+
+### X3D
+nzv_31 <- nearZeroVar(feat_X3D_train)
+nzv_32 <- nearZeroVar(feat_X3D_test)
+
+if(length(unique(c(nzv_31,nzv_32)))>0)
+      {
+        feat_X3D_train<- feat_X3D_train[, -unique(c(nzv_31,nzv_32))]
+        feat_X3D_test<- feat_X3D_test[, -unique(c(nzv_31,nzv_32))]
+}
+
+
+```
+
+
+### Data
+```{r warning= FALSE, message=FALSE }
+
+
+##Check the mean and sd of every columnn in train and test
+head(cbind(train.mean = lapply(feat_rest_train[,-1], mean),
+          train.sd = lapply(feat_rest_train[,-1], sd),
+                test.mean = lapply(feat_rest_test[,-1], mean),
+                      test.sd = lapply(feat_rest_test[,-1], sd)))
+##Check the mean and sd of every columnn in train and test
+head(cbind(train.mean = lapply(feat_X3D_train[,-1], mean),
+          train.sd = lapply(feat_X3D_train[,-1], sd),
+                test.mean = lapply(feat_X3D_test[,-1], mean),
+                      test.sd = lapply(feat_X3D_test[,-1], sd)))
+##Check the mean and sd of every columnn in train and test
+head(cbind(train.mean = lapply(feat_pixel_train[,-1], mean),
+          train.sd = lapply(feat_pixel_train[,-1], sd),
+                test.mean = lapply(feat_pixel_test[,-1], mean),
+                      test.sd = lapply(feat_pixel_test[,-1], sd)))
+
+```
+
+### correlation  ~rest features
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+#scale train
+feat_rest_train_s<- scale(as.matrix(feat_rest_train%>%select(-creation_time))
+                                                                  , center=TRUE,scale=TRUE)
+
+#scale testing
+feat_rest_test_s<- scale(as.matrix(feat_rest_test%>%select(-creation_time)
+                                                                  , center=TRUE,scale=TRUE),
+                                                                     attr(feat_rest_train_s, "scaled:center"),
+                                                                        attr(feat_rest_train_s, "scaled:scale") )
+
+
+##Transform both sets
+feat_rest_train<-as.data.frame(feat_rest_train_s[,])
+feat_rest_test<-as.data.frame(feat_rest_test_s[,])
+
+## Check
+feat_rest_train[1:5,1:5]
+feat_rest_test[1:5,1:5]
+
+### Scale alt
+#feat_rest_test<- scale(as.matrix(feat_rest_test), center = mean(feat_rest_train), scale = sd(feat_rest_train) ))
+
+
+
+# #to data frame
+# feat_rest_train_s<-as.data.frame(feat_rest_train_s)
+#     feat_rest_test_s<-as.data.frame(feat_rest_test_s)
+# 
+# 
+# ##############################################3
+# rep_rest<-cbind(train.mean = lapply(feat_rest_train_s[,-1], mean),
+#                      train.sd = lapply(feat_rest_train_s[,-1], sd),
+#                            test.mean = lapply(feat_rest_test_s[,-1], mean),
+#                                 test.sd = lapply(feat_rest_test_s[,-1], sd))
+# head(rep_rest)
+
+
+##############################################3
+
+# 
+# ### check in detail
+# library(xda)
+# xdatrain<-numSummary(feat_rest_train_s)
+# head(xdatrain)
+# xdatest<-numSummary(feat_rest_test_s)
+# head(xdatest)
+# #xdatab2<-charSummary(tab3)
+```
+
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+
+#scale train
+feat_X3D_train_s<- scale(as.matrix(feat_X3D_train), center=TRUE,scale=TRUE)
+
+#scale testing
+feat_X3D_test_s<- scale(as.matrix(feat_X3D_test),
+                         attr(feat_X3D_train_s, "scaled:center"),
+                                        attr(feat_X3D_train_s, "scaled:scale") )
+
+
+##Transform both sets
+feat_X3D_train<-as.data.frame(feat_X3D_train_s[,])
+feat_X3D_test<-as.data.frame(feat_X3D_test_s[,])
+
+## Check
+feat_X3D_train[1:5,1:5]
+feat_X3D_test[1:5,1:5]
+# 
+# #to data frame
+# feat_X3D_train_s<-as.data.frame(feat_X3D_train_s)
+#     feat_X3D_test_s<-as.data.frame(feat_X3D_test_s)
+# 
+# 
+# ##############################################3
+# rep_X3D<-cbind(train.mean = lapply(feat_X3D_train_s[,-1], mean),
+#                      train.sd = lapply(feat_X3D_train_s[,-1], sd),
+#                            test.mean = lapply(feat_X3D_test_s[,-1], mean),
+#                                 test.sd = lapply(feat_X3D_test_s[,-1], sd))
+# head(rep_X3D)
+# 
+# 
+# ##############################################3
+# 
+# 
+# ### check in detail
+# library(xda)
+# xdatrain<-numSummary(feat_X3D_train_s)
+# head(xdatrain)
+# xdatest<-numSummary(feat_X3D_test_s)
+# head(xdatest)
+#xdatab2<-cha
+```
+
+
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+
+#scale train
+feat_pixel_train_s<- scale(as.matrix(feat_pixel_train), center=TRUE,scale=TRUE)
+
+#scale testing
+feat_pixel_test_s<- scale(as.matrix(feat_pixel_test),
+                         attr(feat_pixel_train_s, "scaled:center"),
+                                        attr(feat_pixel_train_s, "scaled:scale") )
+
+##Transform both sets
+feat_pixel_train<-as.data.frame(feat_pixel_train_s[,])
+feat_pixel_test<-as.data.frame(feat_pixel_test_s[,])
+
+## Check
+feat_pixel_train[1:5,1:5]
+feat_pixel_test[1:5,1:5]
+
+# 
+# 
+# 
+# #to data frame
+# feat_pixel_train_s<-as.data.frame(feat_pixel_train_s)
+#     feat_pixel_test_s<-as.data.frame(feat_pixel_test_s)
+# 
+# 
+# ##############################################3
+# rep_pixel<-cbind(train.mean = lapply(feat_pixel_train_s[,-1], mean),
+#                      train.sd = lapply(feat_pixel_train_s[,-1], sd),
+#                            test.mean = lapply(feat_pixel_test_s[,-1], mean),
+#                                 test.sd = lapply(feat_pixel_test_s[,-1], sd))
+# head(rep_pixel)
+# 
+# 
+# ##############################################3
+# 
+# 
+# ### check in detail
+# library(xda)
+# xdatrain<-numSummary(feat_pixel_train_s)
+# head(xdatrain)
+# xdatest<-numSummary(feat_pixel_test_s)
+# head(xdatest)
+# #xdatab2<-cha
+```
+
+
+
+### correlation  ~pixel features
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+####################################################################################################################
+#Elegimos las componentes a utilizar
+num.cols <- names(which(sapply(feat_pixel_train, function(x) is.numeric(x) )))
+
+set.seed(1234)
+num.cols<- sample(num.cols, 100)
+
+svd_seq<-feat_pixel_train[,num.cols ]
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+```
+
+### PCA from ~pixel features
+```{r warning= FALSE, message=FALSE }
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply(feat_pixel_train, function(x) is.numeric(x) )))
+
+pca <- prcomp(feat_pixel_train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                    geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~pixel features ")
+ggplotly(p)
+#Replace features by PCA components
+feat_pixel_train_pca<-as.data.frame(pca$x[,1:100])
+colnames(feat_pixel_train_pca)<-paste("pca_pixel_",1:100,sep="")
+
+### APPLY TO TESTING DATA 
+feat_pixel_test_pca<-as.data.frame(predict(pca, newdata=feat_pixel_test[,num.cols])[,1:100])
+colnames(feat_pixel_test_pca)<-paste("pca_pixel_",1:100,sep="")
+
+
+```
+
+
+### scatter first 4 dimensions
+```{r warning= FALSE, message=FALSE ,fig.width = 10, fig.height = 10 , fig.align = 'center' }
+
+library(plotly)
+
+pc<-as.data.frame(pca$x[,1:4])%>%
+                      rename(Dim1=PC1,
+                             Dim2=PC2,
+                             Dim3=PC3,
+                             Dim4=PC4)
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim2, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim3, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim3')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim2, y = ~Dim4, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim4')))
+
+p
+
+
+```
+
+### correlation  ~X3D features
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+####################################################################################################################
+#Elegimos las componentes a utilizar
+num.cols <- names(which(sapply(feat_X3D_train, function(x) is.numeric(x) )))
+
+svd_seq<-feat_X3D_train[,num.cols ]
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+```
+
+
+### PCA from ~X3D features
+```{r warning= FALSE, message=FALSE }
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply(feat_X3D_train, function(x) is.numeric(x) )))
+
+pca <- prcomp(feat_X3D_train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                                            geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~X3D features ")
+ggplotly(p)
+#Replace features by PCA components
+feat_X3D_train_pca<-as.data.frame(pca$x[,1:10])
+colnames(feat_X3D_train_pca)<-paste("pca_X3D_",1:10,sep="")
+
+### Apply to testing
+feat_X3D_test_pca<-as.data.frame(predict(pca, newdata=feat_X3D_test[,num.cols])[,1:10])
+colnames(feat_X3D_test_pca)<-paste("pca_X3D_",1:10,sep="")
+```
+
+### scatter first 4 dimensions
+```{r warning= FALSE, message=FALSE ,fig.width = 10, fig.height = 10 , fig.align = 'center' }
+
+library(plotly)
+
+pc<-as.data.frame(pca$x[,1:4])%>%
+                      rename(Dim1=PC1,
+                             Dim2=PC2,
+                             Dim3=PC3,
+                             Dim4=PC4)
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim2, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim3, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim3')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim2, y = ~Dim4, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim4')))
+
+p
+
+
+```
+
+
+### Análisis de correlación
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+####################################################################################################################
+#Elegimos las componentes a utilizar
+num.cols <- names(which(sapply(feat_rest_train, function(x) is.numeric(x) )))
+
+svd_seq<-feat_rest_train[,num.cols ]
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+```
+
+
+### PCA from ~rest features
+```{r warning= FALSE, message=FALSE }
+
+# conduct PCA on training dataset
+num.cols <- names(which(sapply(feat_rest_train, function(x) is.numeric(x) )))
+
+pca <- prcomp(feat_rest_train[,num.cols], retx=TRUE, center=FALSE, scale=FALSE)
+#Eigenvalues
+eig <- (pca$sdev)^2 ; variance <-eig*100/sum(eig) ; cumvar <- cumsum(variance) ; Comp<- 1:length(cumvar)
+
+p<-as.data.frame(cbind(Comp,cumvar)) %>%
+                ggplot(aes(x =factor(Comp), y = cumvar)) + 
+                                            geom_bar(stat = "identity")  + geom_hline(yintercept=95, col="red") +
+                            xlab("components  ~X3D features ")
+ggplotly(p)
+#Replace features by PCA components
+feat_rest_train_pca<-as.data.frame(pca$x[,1:12])
+colnames(feat_rest_train_pca)<-paste("pca_rest_",1:12,sep="")
+
+## Apply to testing
+feat_rest_test_pca<-as.data.frame(predict(pca, newdata=feat_rest_test[,num.cols])[,1:12])
+colnames(feat_rest_test_pca)<-paste("pca_rest_",1:12,sep="")
+```
+
+
+### scatter first 4 dimensions
+```{r warning= FALSE, message=FALSE ,fig.width = 10, fig.height = 10 , fig.align = 'center' }
+
+library(plotly)
+
+pc<-as.data.frame(pca$x[,1:4])%>%
+                      rename(Dim1=PC1,
+                             Dim2=PC2,
+                             Dim3=PC3,
+                             Dim4=PC4)
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim2, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim2')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim1, y = ~Dim3, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim3')))
+
+p
+
+p <- plot_ly(pc, x = ~Dim2, y = ~Dim4, color = ~as.factor(train_index$type_cat)) %>%
+  layout(scene = list(xaxis = list(title = 'Dim1'),
+                     yaxis = list(title = 'Dim4')))
+
+p
+
+
+
+```
+
+
+
+
+### Análisis de correlación X3D + PCA
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+testcor<-cbind(feat_X3D_train_pca, feat_X3D_train)
+
+svd_seq<-testcor
+# Correlation scatter plots for all combinations between the first four principal components.
+library(reshape2)
+cormat <- round(cor(svd_seq),4)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+
+p<-ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+ggplotly(p)
+
+
+#feat_X3D_train_pca, feat_X3D_train, feat_pixel_train_pca,feat_rest_train_pca
+
+```
+
+
+
+#Generate outputs
+```{r warning= FALSE, message=FALSE ,fig.align = 'center' }
+train2<-cbind(train_index, feat_rest_train_pca, feat_X3D_train, feat_X3D_train_pca,  feat_pixel_train_pca)
+test2<-cbind(test_index,feat_rest_test_pca, feat_X3D_test, feat_X3D_test_pca,  feat_pixel_test_pca)
+write.csv(train2,"../../output/features/Andrei/old/ccs.new_train_v1.csv",row.names = FALSE )
+write.csv(test2,"../../output/features/Andrei/old/ccs.new_test_v1.csv",row.names = FALSE )
+
+```
